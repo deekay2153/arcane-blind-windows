@@ -1,4 +1,4 @@
-/* Arcane Blind Windows 1.0.0
+/* Arcane Blind Windows 1.1.0
  * https://github.com/deekay2153/arcane-blind-windows
  *
  * Every room drawn as its windows, each blind shown at its real height and
@@ -13,6 +13,9 @@
  *   title: Blinds                 (header: false hides the top row)
  *   stagger: 0                    seconds between blinds when several move
  *                                 at once (for hubs that drop commands)
+ *   script: script.my_sender      optional: open / close of script_min or
+ *   script_min: 2                 more blinds goes through this script,
+ *   script_data: {}               called with {covers, command} plus script_data
  *   fabric: "#dcd7cc"             blind colour
  *   rooms:
  *     - name: Bedroom
@@ -30,7 +33,7 @@
  * don't (most motor hubs without feedback) are drawn moving at their travel
  * time and settle on what Home Assistant believes afterwards.
  */
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const HEAD = 6; // % of the window the rolled-up blind always covers
 
 const ICON = {
@@ -179,6 +182,9 @@ class ArcaneBlindWindows extends HTMLElement {
     });
     this._config = config;
     this._stagger = Math.max(0, Math.min(10, Number(config.stagger) || 0));
+    this._script = config.script ? String(config.script).replace(/^script\./, '') : null;
+    this._scriptMin = Math.max(1, Number(config.script_min) || 2);
+    this._scriptData = config.script_data && typeof config.script_data === 'object' ? config.script_data : {};
     this._build();
     if (this._hass) this._update();
   }
@@ -506,7 +512,20 @@ class ArcaneBlindWindows extends HTMLElement {
       this._call('cover', 'stop_cover', { entity_id: ids });
     } else {
       const to = cmd === 'open' ? 100 : 0;
-      if (this._stagger && live.length > 1) {
+      if (this._script && live.length >= this._scriptMin) {
+        // Your own script sends the commands (for example one that queues
+        // them with your automations). The picture starts each blind on the
+        // `stagger` beat, if set, to match the script's spacing.
+        live.forEach((b, i) => {
+          clearTimeout(b.later);
+          if (i && this._stagger) {
+            b.later = setTimeout(() => { this._go(b, cmd, to, false); this._update(); }, i * this._stagger * 1000);
+          } else {
+            this._go(b, cmd, to, false);
+          }
+        });
+        this._call('script', this._script, { ...this._scriptData, covers: ids, command: cmd });
+      } else if (this._stagger && live.length > 1) {
         // One blind at a time, `stagger` seconds apart, for hubs that drop
         // commands sent together. The picture starts each blind on its beat.
         live.forEach((b, i) => {

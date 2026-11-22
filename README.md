@@ -70,6 +70,9 @@ The card is made to fill the width, so it looks best in a **Panel** view or a fu
 | `title` | `Blinds` | The heading |
 | `header` | `true` | `false` hides the heading and the Open all / Close all buttons |
 | `stagger` | `0` | Seconds between blinds when several move at once, 0 to 10. Some hubs drop commands sent together; try `2`. |
+| `script` | none | Your own script for opening and closing several blinds at once (see below) |
+| `script_min` | `2` | Use `script` when at least this many blinds move together |
+| `script_data` | none | Extra fields passed to `script` |
 | `fabric` | `#dcd7cc` | Colour of the blinds, any CSS colour |
 | `rooms` | required | A list of rooms |
 
@@ -92,6 +95,22 @@ The card is made to fill the width, so it looks best in a **Panel** view or a fu
 | `panes` | `1` | How wide it is drawn: `2` is twice as wide |
 | `join` | `false` | `true` draws it in the same frame as the blind before it, like the two halves of a sliding door |
 | `bar` | `true` | Doors only: `false` hides the middle bar |
+
+### Sending through your own script
+
+Some hubs need more than a gap between commands: for example, every command in the house sent through one queue, or a second try a minute later. Give the card a script and it hands over every open or close of `script_min` or more blinds:
+
+```yaml
+type: custom:arcane-blind-windows
+script: script.blinds_send
+script_min: 4
+script_data:
+  passes: 1
+stagger: 2
+rooms: ...
+```
+
+The script is called with `covers` (a list of cover entities), `command` (`open` or `close`) and anything in `script_data`. Set `stagger` to the script's spacing so the picture starts each blind when the script does. Stop still goes straight to the blinds.
 
 ## Good to know
 
