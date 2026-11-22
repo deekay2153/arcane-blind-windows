@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcane Blind Windows preview</title>
+<body style="margin:0;padding:16px;background:#111318;font-family:Roboto,system-ui,sans-serif;
+  --primary-text-color:#e6e8ec;--secondary-text-color:#9aa3b0;--card-background-color:#1c1f26;
+  --divider-color:rgba(255,255,255,0.1);--primary-color:#4aa3ff">
+<arcane-blind-windows id="c"></arcane-blind-windows>
+<div id="tools" style="margin-top:14px;color:#9aa3b0;font-size:13px">
+  Sky: <button data-sky="day">day</button> <button data-sky="dusk">dusk</button>
+  <button data-sky="night">night</button>
+  <button id="ext">Something else closes the kitchen blind</button>
+</div>
+<pre id="log" style="color:#9aa3b0;font-size:12px"></pre>
+<script type="module">
+// A stand-in for Home Assistant's ha-icon, with a few simple drawn icons, so
+// the page runs without Home Assistant.
+const ICONS = {
+  'mdi:bed': 'M3 18V7h2v6h6V9h7a3 3 0 0 1 3 3v6h-2v-2H5v2zM7 12a2 2 0 1 1 0-.01z',
+  'mdi:sofa': 'M5 10V8a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v2a2 2 0 0 1 2 2v5h-2v2h-2v-2H7v2H5v-2H3v-5a2 2 0 0 1 2-2zm2 3h10v-2a2 2 0 0 1 0-1V8a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1z',
+  'mdi:countertop': 'M2 9h20v3h-1v8h-2v-8H5v8H3v-8H2zm5-5h3v2H8v2H6V5a1 1 0 0 1 1-1z',
+  'mdi:desk': 'M2 6h20v3h-1v10h-2v-4h-5v4h-2V9H5v10H3V9H2zm12 3v4h5V9z',
+};
+customElements.define('ha-icon', class extends HTMLElement {
+  connectedCallback() {
+    const d = ICONS[this.getAttribute('icon')] || 'M12 5a7 7 0 1 1 0 14a7 7 0 0 1 0-14z';
+    this.style.cssText = 'display:inline-flex;width:22px;height:22px';
+    this.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="${d}"/></svg>`;
+  }
+});
+import '../dist/arcane-blind-windows.js';
+
+const q = new URLSearchParams(location.search);
+if (q.has('clean')) document.getElementById('tools').style.display = 'none';
+// Travel times in seconds. The bedroom blinds report their position as they
+// move; the rest only say open or closed, like most hubs without feedback.
+const T = { 'cover.bedroom_left': 15, 'cover.bedroom_middle': 15, 'cover.bedroom_right': 15,
+  'cover.living_sliding_door': 32, 'cover.living_side_window': 32,
+  'cover.kitchen': 20, 'cover.study_left': 20, 'cover.study_right': 20 };
+const LIVE = new Set(['cover.bedroom_left', 'cover.bedroom_middle', 'cover.bedroom_right']);
+const FEATURES = 15; // open, close, set position, stop
+const states = { 'sun.sun': { state: 'above_horizon', attributes: { elevation: 40 } } };
+const start = (q.get('start') || '100,100,0,100,0,50,25,25').split(',').map(Number);
+Object.keys(T).forEach((id, i) => {
+  const p = start[i];
+  states[id] = { state: p ? 'open' : 'closed', attributes: { current_position: p, supported_features: FEATURES } };
+});
+const sky = q.get('sky');
+if (sky) states['sun.sun'] = { state: sky === 'day' ? 'above_horizon' : 'below_horizon', attributes: { elevation: sky === 'day' ? 40 : sky === 'dusk' ? -2 : -30 } };
+const c = document.getElementById('c');
+const calls = [];
+const push = () => { c.hass = { states: { ...states }, callService }; };
+const timers = {};
+function move(id, to) {
+  clearInterval(timers[id]); clearTimeout(timers[id]);
+  const s = states[id];
+  const from = s.attributes.current_position;
+  if (to === from) return;
+  const attrs = { ...s.attributes };
+  states[id] = { state: to > from ? 'opening' : 'closing', attributes: attrs };
+  push();
+  const ms = (T[id] * Math.abs(to - from) / 100) * 1000;
+  const done = () => {
+    clearInterval(timers[id]);
+    states[id] = { state: to ? 'open' : 'closed', attributes: { ...attrs, current_position: to } };
+    push();
+  };
+  if (LIVE.has(id)) {
+    const t0 = Date.now();
+    timers[id] = setInterval(() => {
+      const f = Math.min(1, (Date.now() - t0) / ms);
+      if (f >= 1) return done();
+      states[id] = { ...states[id], attributes: { ...attrs, current_position: Math.round(from + (to - from) * f) } };
+      push();
+    }, 1000);
+  } else timers[id] = setTimeout(done, ms);
+}
+function callService(domain, service, data) {
+  calls.push(`${domain}.${service} ${JSON.stringify(data)}`);
+  document.getElementById('log').textContent = calls.slice(-8).join('\n');
+  [].concat(data.entity_id || []).forEach((id) => {
+    if (service === 'open_cover') move(id, 100);
+    else if (service === 'close_cover') move(id, 0);
+    else if (service === 'set_cover_position') move(id, data.position);
+    else if (service === 'stop_cover') {
+      clearInterval(timers[id]); clearTimeout(timers[id]);
+      states[id] = { state: 'open', attributes: { ...states[id].attributes, current_position: 50 } };
+      push();
+    }
+  });
+  return Promise.resolve();
+}
+c.setConfig({
+  type: 'custom:arcane-blind-windows', title: 'Blinds', stagger: Number(q.get('stagger')) || 0,
+  rooms: [
+    { name: 'Bedroom', icon: 'mdi:bed', blinds: [
+      { entity: 'cover.bedroom_left', name: 'Left', travel: 15 },
+      { entity: 'cover.bedroom_middle', name: 'Middle', travel: 15 },
+      { entity: 'cover.bedroom_right', name: 'Right', travel: 15 } ] },
+    { name: 'Living room', icon: 'mdi:sofa', blinds: [
+      { entity: 'cover.living_side_window', name: 'Side', travel: 32, shape: 'door', panes: 2 },
+      { entity: 'cover.living_sliding_door', name: 'Door', travel: 32, shape: 'door', bar: false, join: true } ] },
+    { name: 'Kitchen', icon: 'mdi:countertop', blinds: [
+      { entity: 'cover.kitchen', name: 'Kitchen', travel: 20 } ] },
+    { name: 'Study', icon: 'mdi:desk', blinds: [
+      { entity: 'cover.study_left', name: 'Left', travel: 20 },
+      { entity: 'cover.study_right', name: 'Right', travel: 20 } ] },
+  ],
+});
+push();
+document.querySelectorAll('[data-sky]').forEach((b) => b.onclick = () => {
+  const k = b.dataset.sky;
+  states['sun.sun'] = { state: k === 'day' ? 'above_horizon' : 'below_horizon',
+    attributes: { elevation: k === 'day' ? 40 : k === 'dusk' ? -2 : -30 } };
+  push();
+});
+document.getElementById('ext').onclick = () => move('cover.kitchen', 0);
+window.calls = calls; window.states = states; window.move = move;
+</script>
+</body>
